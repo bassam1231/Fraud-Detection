@@ -1,53 +1,55 @@
+import os
 import pandas as pd
+from joblib import dump
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import LabelEncoder
 from imblearn.over_sampling import SMOTE
-import joblib
-from pathlib import Path
 
-FEATURE_COLS = ['step','type','amount','oldbalanceOrg','newbalanceOrig','oldbalanceDest','newbalanceDest']
-TARGET_COL = "isFraud"
+from src.configuration.config import config
 
-def load_data(file_path="data/raw/transactions.csv"):
+def load_data():
     try:
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(config.data.dataset_path)
         return df
     except Exception as e:
-        print(f"Error loading data from {file_path}: {e}")
+        print(f"Error loading Data from {config.data.dataset_path}: {e}")
         return None
 
-def preprocess_data(df, save_scaler=False, scaler_path="../models/scaler.pkl", encoder_path="../models/labelencoder.pkl"):
+def preprocess_data(df):
     if df is None:
-        print("DataFrame is None, cannot preprocess.")
-        return None, None, None, None
+        raise ValueError("Data is None")
 
-    df.drop(columns=['nameOrig', 'nameDest'], inplace=True)
-    le = LabelEncoder()
-    df["type"] = le.fit_transform(df["type"].astype(str))
+    df.drop(columns=config.data.features_to_drop, inplace=True)
 
+    for column_to_encode in config.data.features_to_encode:
+        le = LabelEncoder()
+        df[column_to_encode] = le.fit_transform(df[column_to_encode])
 
+        if config.data.save_encoder:
+            os.makedirs(config.data.encoder_save_path, exist_ok=True)
+            dump(le, config.data.encoder_save_path + f'label_encoder_{column_to_encode}.pkl')
 
-    # select columns, ensure order
-    df = df.copy()
-    X = df[FEATURE_COLS]
-    y = df[TARGET_COL]
+    x = df[config.data.features]
+    y = df[config.data.target]
 
-    smote = SMOTE(random_state=42)
-    X, y = smote.fit_resample(X, y)
+    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=config.training.test_size,
+                                                        random_state=config.seed, stratify=y)
+
+    if config.data.use_smote:
+        smote = SMOTE(random_state=config.seed)
+        x_train, y_train = smote.fit_resample(x_train, y_train)
+
 
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    x_train_scaled = scaler.fit_transform(x_train)
+    x_test_scaled = scaler.transform(x_test)
 
-    if save_scaler:
-        Path(scaler_path).parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(scaler, scaler_path)
-        joblib.dump(le, encoder_path)
+    if config.data.save_scaler:
+        os.makedirs(config.data.scaler_save_path, exist_ok=True)
+        dump(scaler, config.data.scaler_save_path + f'scaler.pkl')
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y, test_size=0.2, random_state=42, stratify=y
-    )
+    if config.data.save_data_after_processing:
+        df.to_csv(config.data.processed_dataset_path, index=False)
 
-    return X_train, X_test, y_train, y_test
-
-
+    return x_train_scaled, x_test_scaled, y_train, y_test
